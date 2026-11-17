@@ -64,7 +64,7 @@
 // constants can never disagree: to change the rate, change SAMPLE_RATE_BITS only.
 #define SAMPLE_RATE_BITS 13                                  // sample rate = 2^13
 #define SAMPLE_RATE_HZ   (1L << SAMPLE_RATE_BITS)            // = 8192 Hz
-#define TIMER_PERIOD     ((4000000 / SAMPLE_RATE_HZ) - 1)    // PR2 value at Fcy = 4 MHz
+#define TIMER_PERIOD     ((4000000 / SAMPLE_RATE_HZ) - 1)  // PR2 value at Fcy = 4 MHz
 
 // PI controller gains
 #define K_P 100   // proportional gain (you tune this in Part 2)
@@ -97,87 +97,55 @@ int32_t integral_accumulator = 0;
  *   Vector Details), which lists the IFS/IEC/IPC bits for Timer2.
  */
 void timer_init(void) {
-    T2CON = 0;                  // DO NOT CHANGE 
-    TMR2  = 0;                  // DO NOT CHANGE 
+    T2CONbits.TCKPS = 0;   
+    T2CONbits.TCS = 0;     // Internal clock (FCY = 4MHz)
+    T2CONbits.TSIDL = 0;
+    
+    PR2 = TIMER_PERIOD; 
+    TMR2 = 0;
 
-    PR2               = TIMER_PERIOD;    // period register - counts = FCY / (prescaler * f_desired) = 4 MHz / (256 * 100 Hz) = 125.25
-    T2CONbits.TCKPS   = 0;               // prescaler select - 1:1
-    T2CONbits.TCS     = 0;               // clock source     - FOSC/2
-    T2CONbits.T32     = 0;               // timer width - 16 bits
-
-    IFS0bits.T2IF     = 0;               // Clear interrupt flag
-    IPC1bits.T2IP     = 2;               // Timer2 priority    
-    IEC0bits.T2IE     = 1;               // interrupt enable   
-    T2CONbits.TON     = 1;               // start timer        
-
-
-    T3CON = 0;                           // DO NOT CHANGE 
-    TMR3  = 0;                           // DO NOT CHANGE 
-
-    PR3               = 625;             // period register - counts = FCY / (prescaler * f_desired) = 4 MHz / (1 * 100 Hz) = 625
-    T3CONbits.TCKPS   = 0;               // prescaler select - 1:1
-    T3CONbits.TCS     = 0;               // clock source     - FOSC/2
-
-    T3CONbits.TON     = 1;               // start timer   
+    IFS0bits.T2IF = 0;     // Clear Timer3 interrupt flag
+    IPC1bits.T2IP = 4;     // Priority 2
+    IEC0bits.T2IE = 1;     // Enable Timer3 interrupt
+    T2CONbits.TON = 1;     // Turn on Timer3
 }
 
-/* ADC_init()
- *
- * TODO: configure the ADC to convert the boost feedback voltage on AN1/RA1 at 12-bit
- *   resolution. main() has already made AN1 analog, so setting this pin up as an analog
- *   input is not a part of your ADC setup. See datasheet Section 24 (A/D Converter),
- *   specifically the AD1CON1/AD1CON2/AD1CON3/AD1CHS registers: set input channel, voltage
- *   references, output format, the sample/convert sequence, the acquisition time, and the
- *   conversion clock. Then set operating mode to ON.
- *
- *   Names in code: the reference bits are AD1CON2bits.PVCFG (2 bits) and AD1CON2bits.NVCFG0.
- *   There is no NVCFG field. NVCFG0 = 1 would make RA1 itself the negative reference.
- */
 void ADC_init(void) {
-    AD1CON2bits.PVCFG = 0;      // Poistive reference = AVdd
-    AD1CON2bits.NVCFG0 = 0;     // Negative reference = AVss
-
-    AD1CHSbits.CH0SA = 0b0001;  // Input channel = AN1
-    AD1CHSbits.CH0NA = 0b000;  // Input channel = AVss
-    
-    AD1CON3bits.ADCS = 0 ;          // ADC uses the system clock (Fcy) as its conversion clock
-    AD1CON3bits.ADCS = 0b00000001   // 2 TCY = TAD
-    AD1CON3bits.SAMC = 0b10010;     // 18 TAD = acquisition time (ADC needs 14 TAD to convert + 2 TAD for synchronization + 2 TAD for safety margin)
-    
-    AD1CON1bits.SSRC = 0b0111;      // Auto-Convert mode
-    AD1CON1bits.MODE12 = 0b1;       // 12-bit mode
-    AD1CON1bits.FORM = 0b00;        // Output format unsigned integer (0 - 4095)
-    AD1CON1bits.ADON = 1;           // Turn on the ADC
-
-    IFS0bits.AD1IF = 0;             // Clear ADC interrupt flag
-    ICE0bits.AD1IE = 1;             // Enable ADC interrupt
-    IPC3bits.AD1IP = 2;             // Set ADC interrupt priority
+    AD1CON1bits.ADON   = 0;      // ADC off while configuring
+ 
+    AD1CON1bits.MODE12 = 1;      // 12-bit operation
+    AD1CON1bits.FORM   = 0b00;   // unsigned, right-justified -> 0..4095
+    AD1CON1bits.SSRC   = 0b0111; // auto-convert, start the conversion after SAMC × Tad
+    AD1CON1bits.ASAM   = 0;      // sampling starts only when software sets SAMP
+ 
+    AD1CON2bits.PVCFG  = 0b00;   // Vref+ = AVdd (3.3 V)
+    AD1CON2bits.NVCFG0 = 0;      // Vref- = AVss
+ 
+    AD1CON3bits.ADRC   = 0;      // ADC clock derived from Tcy
+    AD1CON3bits.ADCS   = 1;      // Tad = (1+1)Tcy = 500 ns
+    AD1CON3bits.SAMC   = 20;      // sample time = 8Tad = 4 us
+ 
+    AD1CHSbits.CH0SA   = 1;      // positive input = RA1
+    AD1CHSbits.CH0NA   = 0;      // negative input = AVss
+ 
+    AD1CON1bits.ADON   = 1;      // turn the ADC on last
 }
 
 /* ADC_read()
  *
- * TODO: perform one sample-and-convert and return the 12-bit right-justified result
- *   (0..4095). How you detect that a conversion has finished, and how you get from
- *   ADC1BUF0 to a 0..4095 code, both follow from the choices you made in ADC_init().
- *
- *   Hint: clear DONE yourself just before you set SAMP. DONE can still be 1 from the
- *   previous conversion, and polling it without clearing it first can return the old result.
- */
+ 
+TODO: perform one sample-and-convert and return the 12-bit right-justified result
+(0..4095). How you detect that a conversion has finished, and how you get from
+ADC1BUF0 to a 0..4095 code, both follow from the choices you made in ADC_init().*
+Hint: clear DONE yourself just before you set SAMP. DONE can still be 1 from the
+previous conversion, and polling it without clearing it first can return the old result.*/
 uint16_t ADC_read(void) {
-    AD1CON1bits.DONE = 0;   // Clear DONE bit
-    AD1CON1bits.SAMP = 1;   // Start sampling
-    counter = 0;   // Reset counter
-    while (!AD1CON1bits.DONE);   // Wait for conversion to complete
-    {
-        if (counter > 10000)   // Timeout after 10000 iterations
-        {
-            return 0;   // Return 0 if conversion takes too long
-        }
-        counter++;   // Increment counter
-    }
-    
-    return ADC1BUF0;   // replace with your reading
+    AD1CON1bits.DONE = 0;           // clear stale DONE from the last conversion
+    AD1CON1bits.SAMP = 1;           // start sampling; HW auto-converts after SAMC
+    while (!AD1CON1bits.DONE);      // poll until the conversion finishes
+    return ADC1BUF0;                // right-justified 12-bit result, 0..4095
 }
+
 
 /* set_pwm()
  *
@@ -185,7 +153,11 @@ uint16_t ADC_read(void) {
  *   register so a runaway controller can never exceed the safe duty cycle.
  */
 void set_pwm(int32_t duty) {
-
+    if (duty < PWM_DUTY_MIN)
+        duty = PWM_DUTY_MIN;   // never negative
+    if (duty > PWM_DUTY_MAX)
+        duty = PWM_DUTY_MAX;   // never above 80% (320/400)
+    OC1R = (uint16_t)duty;                          // pin high until OC1 timer reaches OC1R
 }
 
 /* _T2Interrupt()
@@ -194,7 +166,8 @@ void set_pwm(int32_t duty) {
  *   interrupt in hardware. Nothing else (see the ISR rules in the handout).
  */
 void __attribute__((interrupt, no_auto_psv)) _T2Interrupt(void) {
-
+    timer_flag = 1;
+    IFS0bits.T2IF = 0; // Clear flag
 }
 
 
@@ -281,13 +254,18 @@ void main(void) {
     ANSELAbits.ANSA1  = 1;        // ...except RA1/AN1 = analog input (REQUIRED for the ADC)
     TRISAbits.TRISA1  = 1;        // RA1 as input  (ADC feedback)
     TRISBbits.TRISB13 = 0;        // RB13 as output (PWM)
+    TRISBbits.TRISB5 = 0; // timer check
 
     timer_init();
     ADC_init();
     pwm_init();
+    
+    //set_pwm(400);
 
     while (1) {
-        if (timer_flag) {                                     // a Timer2 tick is pending
+        
+        if (timer_flag) { // a Timer2 tick is pending
+            LATBbits.LATB5 ^= 1;
             int32_t measured = get_ADC_voltage_Q8();          // SENSE   (provided wrapper, your ADC_read)
             int32_t error    = REFERENCE - measured;          // COMPARE (provided)
             update_accumulator(error);                        // integral_accumulator is updated here
